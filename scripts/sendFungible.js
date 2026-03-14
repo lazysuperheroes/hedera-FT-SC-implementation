@@ -8,9 +8,9 @@ const { getArgFlag, getArg } = require('../utils/nodeHelpers');
 
 const main = async () => {
 	if (getArgFlag('h')) {
-		console.log('Usage: node setAllowance.js -amt <amount> -acct <account> [--multisig]');
-		console.log('       -amt      amount to set as allowance (in token units)');
-		console.log('       -acct     account to grant the allowance to (0.0.XXX)');
+		console.log('Usage: node sendFungible.js -amt <amount> -acct <account> [--multisig]');
+		console.log('       -amt     amount to send (in token units)');
+		console.log('       -acct    recipient Hedera account (0.0.XXX)');
 		console.log('       --multisig  use multi-sig signing');
 		process.exit(0);
 	}
@@ -20,12 +20,12 @@ const main = async () => {
 		process.exit(1);
 	}
 	if (!getArgFlag('acct')) {
-		console.log('ERROR: Please specify account with -acct');
+		console.log('ERROR: Please specify recipient account with -acct');
 		process.exit(1);
 	}
 
 	const amount = Number(getArg('amt'));
-	const accountId = AccountId.fromString(getArg('acct'));
+	const recipientId = AccountId.fromString(getArg('acct'));
 
 	if (isNaN(amount) || amount <= 0) {
 		console.log('ERROR: Amount must be a positive number');
@@ -43,33 +43,31 @@ const main = async () => {
 	const rawAmount = Math.floor(amount * (10 ** tokenDecimals));
 
 	printHeader({
-		scriptName: 'Set Allowance',
+		scriptName: 'Send Fungible Token',
 		env,
 		operatorId: operatorId.toString(),
 		contractId: contractId.toString(),
 		additionalInfo: {
 			'Token': tokenId.toString(),
-			'Spender': accountId.toString(),
+			'Recipient': recipientId.toString(),
 			'Amount': `${amount} (${rawAmount} raw, ${tokenDecimals} decimals)`,
 		},
 	});
 
-	confirmOrExit(
-		`Set allowance of ${amount} of token ${tokenId.toString()} for ${accountId.toString()}?`,
-	);
+	confirmOrExit(`Send ${amount} tokens to ${recipientId.toString()}?`);
 
 	const iface = loadInterface(contractName);
 	const multisigOptions = getMultisigOptions();
 
 	const result = await contractExecuteWithMultisig(
 		contractId, iface, client,
-		GAS.ALLOWANCE_APPROVE,
-		'approveAllowance',
-		[tokenId.toSolidityAddress(), accountId.toSolidityAddress(), rawAmount],
+		GAS.TOKEN_TRANSFER,
+		'transferHTS',
+		[tokenId.toSolidityAddress(), recipientId.toSolidityAddress(), rawAmount],
 		multisigOptions,
 	);
 
-	logResult(result, 'Allowance Approval');
+	logResult(result, 'Token Transfer');
 };
 
 runScript(main);

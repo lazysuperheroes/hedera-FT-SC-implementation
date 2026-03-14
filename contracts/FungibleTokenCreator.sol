@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.8.12 <0.9.0;
+// Compiled with Solidity 0.8.18
 
 import {HederaResponseCodes} from "./HederaResponseCodes.sol";
 import {HederaTokenService} from "./HederaTokenService.sol";
@@ -36,7 +37,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
     /// @param memo token longer form description as a string
     /// @param initialSupply number of tokens to mint
     /// @param decimals decimal for the token -> 100 of the token divisible to 1dp will be 1000 supply with decimal 1
-    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped suply @ maxSupply
+    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped supply @ maxSupply
     /// @return createdTokenAddress the address of the new token
     function createTokenWithNoKeys(
         string memory name,
@@ -101,16 +102,16 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
 
         (responseCode) = HederaTokenService.approve(token, spender, amount);
 
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("allowance approval - failed");
+        }
+
         emit TokenControllerMessage(
             "Approval",
             spender,
             SafeCast.toInt64(SafeCast.toInt256(amount)),
             "Allowance approved"
         );
-
-        if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("allowance approval - failed");
-        }
     }
 
     /// Check the allowance for a specific user via an SC call [mirror node better?]
@@ -128,16 +129,16 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             spender
         );
 
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("getAllowance - failed");
+        }
+
         emit TokenControllerMessage(
             "Allowance checked",
             spender,
             SafeCast.toInt64(SafeCast.toInt256(amount)),
             "checked"
         );
-
-        if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("getAllowance - failed");
-        }
     }
 
     /// Use HTS to transfer FT
@@ -150,8 +151,10 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         int64 amount
     )
 		external
-		onlyOwner 
+		onlyOwner
 	returns (int responseCode) {
+		require(amount > 0, "Positive transfers only");
+
         responseCode = HederaTokenService.transferToken(
             token,
             address(this),
@@ -159,7 +162,9 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             amount
         );
 
-		require(amount > 0, "Positive transfers only");
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("transferHTS - failed");
+        }
 
         emit TokenControllerMessage(
             "Transfer with HTS",
@@ -167,15 +172,11 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             amount,
             "completed"
         );
-
-        if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("transferHTS - failed");
-        }
     }
 
     /// Transfer token from this contract to the recipient
     /// @param token address in EVM format of the token to transfer
-    /// @param recipient address in EVM fomat of the reciever of the token
+    /// @param recipient address in EVM format of the receiver of the token
     /// @param amount number of tokens to send (in long form adjusted for decimal)
     /// @return sent a boolean signalling success
     function transfer(
@@ -193,11 +194,11 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
     }
 
 
-    // Transfer hbar oput of the contract - using secure ether transfer pattern
-    // on top of onlyOwner as max gas of 2300 (not adjustable) will limit re-entrrant attacks
-    // also throws error on failure causing contract to auutomatically revert
-    /// @param receiverAddress address in EVM fomat of the reciever of the token
-    /// @param amount number of tokens to send (in long form adjusted for decimal)
+    // Transfer hbar out of the contract - using secure ether transfer pattern
+    // Address.sendValue forwards all available gas; onlyOwner limits re-entrancy risk
+    // Throws error on failure causing contract to automatically revert
+    /// @param receiverAddress address in EVM format of the receiver of the hbar
+    /// @param amount amount of hbar to send (in tinybar)
     function transferHbar(address payable receiverAddress, uint amount)
         external
         onlyOwner
@@ -214,7 +215,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
     }
 
     // Add an address to the allowance WL
-    /// @param newAddress the newss address to add
+    /// @param newAddress the new address to add
     function addAllowanceWhitelist(address newAddress) external onlyOwner {
         _allowanceWL.add(newAddress);
         emit TokenControllerMessage(
@@ -238,7 +239,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
     }
 
     /// Check the current White List for Approvals
-    /// @return wl an array of addresses currently enabled for allownace approval
+    /// @return wl an array of addresses currently enabled for allowance approval
     function getAllowanceWhitelist()
         external
         view
@@ -254,7 +255,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         return _allowanceWL.contains(addressToCheck);
     }
 
-    // allows the contract top recieve HBAR
+    // allows the contract to receive HBAR
     receive() external payable {
         emit TokenControllerMessage(
             "Receive",

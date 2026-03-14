@@ -1,0 +1,22 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+PK-*
+
+# Development
+.claude/
+cache/
+coverage/
+coverage.json
+typechain/
+typechain-types/
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

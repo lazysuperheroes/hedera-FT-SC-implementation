@@ -11,3 +11,6 @@ artifacts
 
 package-lock.json
 PK-*
+
+# Claude Code frameworks (exclude all)
+.claude/

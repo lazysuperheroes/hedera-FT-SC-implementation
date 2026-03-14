@@ -1,97 +1,63 @@
-const {
-	AccountId,
-	ContractId,
-} = require('@hashgraph/sdk');
+const { AccountId } = require('@hashgraph/sdk');
+const { createHederaClient, getContractConfig } = require('../utils/clientFactory');
+const { loadInterface } = require('../utils/abiLoader');
+const { printHeader, runScript } = require('../utils/scriptHelpers');
+const { getContractLogs } = require('../utils/hederaMirrorHelpers');
 
-require('dotenv').config();
-const fs = require('fs');
-const axios = require('axios');
-const Web3 = require('web3');
+const main = async () => {
+	const { operatorId, env } = createHederaClient({ requireOperator: false });
+	const { contractId, contractName } = getContractConfig();
 
-const baseUrlForMainnet = 'https://mainnet-public.mirrornode.hedera.com';
-const baseUrlForTestnet = 'http://testnet.mirrornode.hedera.com';
-const env = process.env.ENVIRONMENT ?? null;
-const contractName = process.env.CONTRACT_NAME ?? null;
-const eventName = process.env.EVENT_NAME ?? null;
+	if (!contractId) {
+		console.log('ERROR: Must specify CONTRACT_ID in .env file');
+		process.exit(1);
+	}
 
-let abi;
-const web3 = new Web3;
+	printHeader({
+		scriptName: 'Get Contract Logs',
+		env,
+		operatorId: operatorId ? operatorId.toString() : '(none)',
+		contractId: contractId.toString(),
+	});
 
-async function main() {
-	console.log('Using ENIVRONMENT:', env);
+	const iface = loadInterface(contractName);
 
-	if (env === undefined || env == null) {
-		console.log('Environment required, please specify TEST or MAIN in the .env file');
+	console.log('\n- Fetching logs from mirror node...');
+	const logs = await getContractLogs(env, contractId, iface, 100);
+
+	if (logs.length === 0) {
+		console.log('  No logs found.');
 		return;
 	}
 
-	if (contractName === undefined || contractName == null) {
-		console.log('Environment required, please specify CONTRACT_NAME for ABI in the .env file');
-		return;
-	}
+	console.log(`  Found ${logs.length} log entries:\n`);
 
-	if (eventName === undefined || eventName == null) {
-		console.log('Environment required, please specify EVENT_NAME to decode in the .env file');
-		return;
-	}
+	for (const log of logs) {
+		if (log.decoded) {
+			let outputStr = `  [${log.decoded.name}] `;
+			const args = log.decoded.args;
+			for (let i = 0; i < args.length; i++) {
+				const field = String(args[i]);
+				let output = field;
 
-	// import ABI
-	const json = JSON.parse(fs.readFileSync(`./artifacts/contracts/${contractName}.sol/${contractName}.json`, 'utf8'));
-	abi = json.abi;
-
-	const contractId = ContractId.fromString(process.env.CONTRACT_ID);
-
-	// get contract events from a mirror node
-	await getEventsFromMirror(contractId);
-}
-
-/**
- * Gets all the events for a given ContractId from a mirror node
- * @param contractId
- */
-
-async function getEventsFromMirror(contractId) {
-	console.log('\n -Getting event(s) from mirror nodes');
-
-	const baseUrl = env.toUpperCase() == 'MAIN' ? baseUrlForMainnet : baseUrlForTestnet;
-
-	const url = `${baseUrl}/api/v1/contracts/${contractId.toString()}/results/logs?order=desc&limit=100`;
-	console.log(url);
-	axios.get(url)
-		.then(function(response) {
-			const jsonResponse = response.data;
-			jsonResponse.logs.forEach(log => {
-				// decode the event data
-				if (log.data == '0x') return;
-				const event = decodeEvent(log.data, log.topics.slice(1));
-
-				// console.log('EVENT:\n', JSON.stringify(event, null, 3));
-
-				let outputStr = '';
-				for (let f = 0; f < event.__length__; f++) {
-					const field = event[f];
-					let output = field.startsWith('0x') ? AccountId.fromSolidityAddress(field).toString() : field;
-					output = f == 0 ? output : ' : ' + output;
-					outputStr += output;
+				// Attempt to convert EVM addresses to Hedera format
+				if (field.startsWith('0x') && field.length === 42) {
+					try {
+						output = `${AccountId.fromSolidityAddress(field).toString()} (${field})`;
+					}
+					catch {
+						// Keep original value
+					}
 				}
 
-				console.log(outputStr);
-			});
-		})
-		.catch(function(err) {
-			console.error(err);
-		});
-}
+				outputStr += i === 0 ? output : ` : ${output}`;
+			}
+			console.log(outputStr);
+		}
+		else {
+			console.log(`  [raw] data=${log.data}, topics=${JSON.stringify(log.topics)}`);
+		}
+	}
+};
 
-/**
- * Decodes event contents using the ABI definition of the event
- * @param log log data as a Hex string
- * @param topics an array of event topics
- */
-function decodeEvent(log, topics) {
-	const eventAbi = abi.find(event => (event.name === eventName && event.type === 'event'));
-	const decodedLog = web3.eth.abi.decodeLog(eventAbi.inputs, log, topics);
-	return decodedLog;
-}
-
-void main();
+runScript(main);
