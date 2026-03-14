@@ -298,23 +298,14 @@ describe('Interaction: ', function() {
 		[result] = await transferFungibleRaw(aliceId, 1);
 		if (result.status.toString() !== 'SUCCESS') failCount++;
 
-		// mintAdditionalSupply and burnFromTreasury do not exist in the
-		// no-keys version of the contract. These calls are intentionally
-		// testing that non-existent methods revert. The ABI encoding itself
-		// will throw since these functions are not in the interface.
-		try {
-			await mintAdditionalSupply(1);
-		}
-		catch {
-			failCount++;
-		}
+		// mintAdditionalSupply and burnFromTreasury exist in the ABI but
+		// require a supply key. Since the token was created with no keys,
+		// these calls will fail at the HTS precompile level.
+		[result] = await mintAdditionalSupply(1);
+		if (result.status.toString() !== 'SUCCESS') failCount++;
 
-		try {
-			await executeBurnWithSupply(1);
-		}
-		catch {
-			failCount++;
-		}
+		[result] = await executeBurnWithSupply(1);
+		if (result.status.toString() !== 'SUCCESS') failCount++;
 
 		[result] = await addAddressToWLRaw(aliceId);
 		if (result.status.toString() !== 'SUCCESS') failCount++;
@@ -458,9 +449,8 @@ async function mintAdditionalSupply(amount) {
 }
 
 /**
- * Calls burnFromTreasury on the contract.
- * NOTE: This method does not exist in the no-keys version of the contract.
- * Calls are expected to revert, used to verify that non-existent methods fail.
+ * Calls burnFromTreasury on the contract (requires supply key).
+ * When token is created with no keys, this will fail at the HTS precompile.
  * @param {number} amount
  * @returns {Array} Result from contractExecuteFunction
  */
