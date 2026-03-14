@@ -8,24 +8,24 @@ const { getArgFlag, getArg } = require('../utils/nodeHelpers');
 
 const main = async () => {
 	if (getArgFlag('h')) {
-		console.log('Usage: node setAllowance.js -amt <amount> -acct <account> [--multisig]');
-		console.log('       -amt      amount to set as allowance (in token units)');
-		console.log('       -acct     account to grant the allowance to (0.0.XXX)');
-		console.log('       --multisig  use multi-sig signing');
+		console.log('Usage: node transferHbar.js -amt <amount> -acct <receiver_address> [--multisig]');
+		console.log('       -amt       amount of HBAR to transfer from the contract');
+		console.log('       -acct      receiver Hedera account (0.0.XXX)');
+		console.log('       --multisig use multi-sig signing');
 		process.exit(0);
 	}
 
 	if (!getArgFlag('amt')) {
-		console.log('ERROR: Please specify amount with -amt');
+		console.log('ERROR: Please specify HBAR amount with -amt');
 		process.exit(1);
 	}
 	if (!getArgFlag('acct')) {
-		console.log('ERROR: Please specify account with -acct');
+		console.log('ERROR: Please specify receiver account with -acct');
 		process.exit(1);
 	}
 
 	const amount = Number(getArg('amt'));
-	const accountId = AccountId.fromString(getArg('acct'));
+	const receiverId = AccountId.fromString(getArg('acct'));
 
 	if (isNaN(amount) || amount <= 0) {
 		console.log('ERROR: Amount must be a positive number');
@@ -33,43 +33,41 @@ const main = async () => {
 	}
 
 	const { client, operatorId, env } = createHederaClient({ requireOperator: true });
-	const { contractId, contractName, tokenId, tokenDecimals } = getContractConfig();
+	const { contractId, contractName } = getContractConfig();
 
-	if (!contractId || !tokenId) {
-		console.log('ERROR: Must specify CONTRACT_ID and TOKEN_ID in .env file');
+	if (!contractId) {
+		console.log('ERROR: Must specify CONTRACT_ID in .env file');
 		process.exit(1);
 	}
 
-	const rawAmount = Math.floor(amount * (10 ** tokenDecimals));
-
 	printHeader({
-		scriptName: 'Set Allowance',
+		scriptName: 'Transfer HBAR from Contract',
 		env,
 		operatorId: operatorId.toString(),
 		contractId: contractId.toString(),
 		additionalInfo: {
-			'Token': tokenId.toString(),
-			'Spender': accountId.toString(),
-			'Amount': `${amount} (${rawAmount} raw, ${tokenDecimals} decimals)`,
+			'Receiver': receiverId.toString(),
+			'Amount (HBAR)': amount,
 		},
 	});
 
-	confirmOrExit(
-		`Set allowance of ${amount} of token ${tokenId.toString()} for ${accountId.toString()}?`,
-	);
+	confirmOrExit(`Transfer ${amount} HBAR from contract ${contractId.toString()} to ${receiverId.toString()}?`);
 
 	const iface = loadInterface(contractName);
 	const multisigOptions = getMultisigOptions();
 
+	// Convert HBAR to tinybars (1 HBAR = 100_000_000 tinybars)
+	const amountTinybars = Math.floor(amount * 1e8);
+
 	const result = await contractExecuteWithMultisig(
 		contractId, iface, client,
-		GAS.ALLOWANCE_APPROVE,
-		'approveAllowance',
-		[tokenId.toSolidityAddress(), accountId.toSolidityAddress(), rawAmount],
+		GAS.HBAR_TRANSFER,
+		'transferHbar',
+		[receiverId.toSolidityAddress(), amountTinybars],
 		multisigOptions,
 	);
 
-	logResult(result, 'Allowance Approval');
+	logResult(result, 'HBAR Transfer');
 };
 
 runScript(main);

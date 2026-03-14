@@ -1,66 +1,51 @@
-const {
-	Client,
-	AccountId,
-	PrivateKey,
-	ContractId,
-	ContractInfoQuery,
-} = require('@hashgraph/sdk');
-require('dotenv').config();
+const { createHederaClient, getContractConfig } = require('../utils/clientFactory');
+const { printHeader, runScript, formatTokenAmount } = require('../utils/scriptHelpers');
+const { getContractInfo, checkMirrorBalance } = require('../utils/hederaMirrorHelpers');
 
-// Get operator from .env file
-const operatorKey = PrivateKey.fromString(process.env.PRIVATE_KEY);
-const operatorId = AccountId.fromString(process.env.ACCOUNT_ID);
-const contractName = process.env.CONTRACT_NAME ?? null;
-
-const contractId = ContractId.fromString(process.env.CONTRACT_ID);
-
-const env = process.env.ENVIRONMENT ?? null;
-let client;
-
-// check-out the deployed script - test read-only method
 const main = async () => {
-	if (contractName === undefined || contractName == null) {
-		console.log('Environment required, please specify CONTRACT_NAME for ABI in the .env file');
-		return;
+	const { operatorId, env } = createHederaClient({ requireOperator: false });
+	const { contractId, tokenId, tokenDecimals } = getContractConfig();
+
+	if (!contractId) {
+		console.log('ERROR: Must specify CONTRACT_ID in .env file');
+		process.exit(1);
 	}
 
+	printHeader({
+		scriptName: 'Get Contract Info (Mirror Node)',
+		env,
+		operatorId: operatorId ? operatorId.toString() : '(none)',
+		contractId: contractId.toString(),
+	});
 
-	console.log('\n-Using ENIVRONMENT:', env);
-	console.log('\n-Using Operator:', operatorId.toString());
+	// Fetch contract info from mirror node (free)
+	console.log('\n- Fetching contract info from mirror node...');
+	const info = await getContractInfo(env, contractId);
 
-	if (env.toUpperCase() == 'TEST') {
-		client = Client.forTestnet();
-		console.log('interacting in *TESTNET*');
+	if (!info) {
+		console.log('  ERROR: Could not retrieve contract info from mirror node.');
+		process.exit(1);
 	}
-	else if (env.toUpperCase() == 'MAIN') {
-		client = Client.forMainnet();
-		console.log('interacting in *MAINNET*');
+
+	console.log(`  Contract ID: ${info.contract_id}`);
+	console.log(`  EVM Address: ${info.evm_address}`);
+	console.log(`  Bytecode File: ${info.file_id || '(none)'}`);
+	console.log(`  Auto-Renew Account: ${info.auto_renew_account || '(none)'}`);
+	console.log(`  Auto-Renew Period: ${info.auto_renew_period ? info.auto_renew_period + 's' : '(none)'}`);
+	console.log(`  Created: ${info.created_timestamp}`);
+	console.log(`  Expiry: ${info.expiration_timestamp}`);
+	console.log(`  Deleted: ${info.deleted}`);
+	console.log(`  Memo: ${info.memo || '(none)'}`);
+	console.log(`  Max Auto Associations: ${info.max_automatic_token_associations ?? '(default)'}`);
+
+	// Get balance from mirror node (free)
+	console.log('\n- Fetching balance from mirror node...');
+	const { tokenBalance, hbarBalance } = await checkMirrorBalance(env, contractId.toString(), tokenId);
+
+	console.log(`  HBAR Balance: ${hbarBalance / 1e8} (tinybars: ${hbarBalance})`);
+	if (tokenId) {
+		console.log(`  Token (${tokenId.toString()}) Balance: ${formatTokenAmount(tokenBalance, tokenDecimals)}`);
 	}
-	else {
-		console.log('ERROR: Must specify either MAIN or TEST as environment in .env file');
-		return;
-	}
-
-	client.setOperator(operatorId, operatorKey);
-
-
-	console.log('Using contract:', contractId.toString());
-
-	const contractInfo = new ContractInfoQuery().setContractId(contractId);
-	const txResp = await contractInfo.execute(client);
-	// console.log(JSON.stringify(txResp, null, 4));
-	console.log('Storage:', txResp.storage.toString());
-	console.log('Balance:', txResp.balance.toString());
-	console.log('AutoRenew Account:', txResp.autoRenewAccountId ? txResp.autoRenewAccountId.toString() : txResp.autoRenewAccountId);
-	console.log('Expires:', txResp.expirationTime.toDate().toISOString());
 };
 
-main()
-	.then(() => {
-		// eslint-disable-next-line no-useless-escape
-		process.exit(0);
-	})
-	.catch(error => {
-		console.error(error);
-		process.exit(1);
-	});
+runScript(main);

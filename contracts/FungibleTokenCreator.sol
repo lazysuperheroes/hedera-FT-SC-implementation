@@ -1,19 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0
 pragma solidity >=0.8.12 <0.9.0;
+// Compiled with Solidity 0.8.18
 
-import "./HederaResponseCodes.sol";
-import "./HederaTokenService.sol";
-import "./ExpiryHelper.sol";
-import "./KeyHelper.sol";
+import {HederaResponseCodes} from "./HederaResponseCodes.sol";
+import {HederaTokenService} from "./HederaTokenService.sol";
+import {IHederaTokenService} from "./IHederaTokenService.sol";
+import {ExpiryHelper} from "./ExpiryHelper.sol";
+import {KeyHelper} from "./KeyHelper.sol";
 
 // Import Ownable from the OpenZeppelin Contracts library
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
-import "@openzeppelin/contracts/utils/Address.sol";
-import "@openzeppelin/contracts/utils/math/SafeCast.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {Address} from "@openzeppelin/contracts/utils/Address.sol";
+import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 
-// Expiry Helper extends FeeHelper which extends KeyHelper inherits HederaStokeService
+// Expiry Helper extends FeeHelper which extends KeyHelper inherits HederaTokenService
 // Ownable from OZ to limit access control
 
 contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
@@ -22,7 +24,6 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
     // List of trusted addresses which can mint tokens
     EnumerableSet.AddressSet private _allowanceWL;
 
-
     event TokenControllerMessage(
         string msgType,
         address indexed fromAddress,
@@ -30,56 +31,32 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         string message
     );
 
-	// to avoid serialisation related default causing odd behaviour
-	// implementing custom object as a wrapper
-	struct FTFixedFeeObject {
-		int64 amount;
-        address tokenAddress;
-        bool useHbarsForPayment;
-        bool useCurrentTokenForPayment;
-        address feeCollector;
-	}
-
-	struct FTFractionalFeeObject {
-		int64 numerator;
-		int64 denominator;
-		address feeCollector;
-		int64 minimumAmount;
-        int64 maximumAmount;
-        bool netOfTransfers;
-	}
-
-    // create a fungible Token with no custom fees,
-    // with calling contract as admin key
-    // add a wipe key in order to allow implmentation of burn function
-    // => no additional mint, no pause
+    // Create a fungible token with a WIPE key only (enables user self-burn / deflationary model)
+    // No admin, supply, pause, freeze, KYC, or fee schedule keys
     /// @param name token name
     /// @param symbol token symbol
     /// @param memo token longer form description as a string
     /// @param initialSupply number of tokens to mint
     /// @param decimals decimal for the token -> 100 of the token divisible to 1dp will be 1000 supply with decimal 1
-    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped suply @ maxSupply
+    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped supply @ maxSupply
     /// @return createdTokenAddress the address of the new token
     function createFungibleWithBurn(
-        // bytes memory ed25519Key,
         string memory name,
         string memory symbol,
         string memory memo,
         int64 initialSupply,
         int32 decimals,
         int64 maxSupply
-    ) 
-		external 
-		payable  
-		onlyOwner 
+    )
+		external
+		payable
+		onlyOwner
 	returns (address createdTokenAddress) {
-        // instantiate the list of keys we'll use for token create
         IHederaTokenService.TokenKey[]
             memory keys = new IHederaTokenService.TokenKey[](1);
 
         keys[0] = getSingleKey(KeyType.WIPE, KeyValueType.CONTRACT_ID, address(this));
 
-        // define the token
         IHederaTokenService.HederaToken memory token;
         token.name = name;
         token.symbol = symbol;
@@ -92,62 +69,55 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             token.maxSupply = maxSupply;
         }
 
-        // create the expiry schedule for the token using ExpiryHelper
         token.expiry = createAutoRenewExpiry(
             address(this),
             HederaTokenService.defaultAutoRenewPeriod
         );
 
-        // call HTS precompiled contract, passing initial supply and decimals
         (int responseCode, address tokenAddress) = HederaTokenService
             .createFungibleToken(token, initialSupply, decimals);
 
         if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("mint wipe key failed");
+            revert("mint with wipe key failed");
         }
 
         emit TokenControllerMessage(
             "MINT",
             msg.sender,
             initialSupply,
-            "Minted with wipe key"
+            "Minted with wipe key (burn enabled)"
         );
 
         createdTokenAddress = tokenAddress;
     }
 
-    // create a fungible Token with no custom fees,
-    // with calling contract as admin key
-    // add a wipe key in order to allow implmentation of burn function
-    // add a supply key to allow mint and burn in place
-    // => no admin key, no pause key
+    // Create a fungible token with WIPE + SUPPLY keys (enables burn + re-mint)
+    // No admin key, no pause key
     /// @param name token name
     /// @param symbol token symbol
     /// @param memo token longer form description as a string
     /// @param initialSupply number of tokens to mint
     /// @param decimals decimal for the token -> 100 of the token divisible to 1dp will be 1000 supply with decimal 1
-    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped suply @ maxSupply
+    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped supply @ maxSupply
     /// @return createdTokenAddress the address of the new token
     function createFungibleWithSupplyAndBurn(
-        // bytes memory ed25519Key,
         string memory name,
         string memory symbol,
         string memory memo,
         int64 initialSupply,
         int32 decimals,
         int64 maxSupply
-    ) 
+    )
 		external
 		payable
-		onlyOwner 
+		onlyOwner
 	returns (address createdTokenAddress) {
-        // instantiate the list of keys we will use for token create
         IHederaTokenService.TokenKey[]
             memory keys = new IHederaTokenService.TokenKey[](1);
 
+        // Combine WIPE + SUPPLY into a single key entry
         keys[0] = getSingleKey(KeyType.WIPE, KeyType.SUPPLY, KeyValueType.CONTRACT_ID, address(this));
 
-        // define the token
         IHederaTokenService.HederaToken memory token;
         token.name = name;
         token.symbol = symbol;
@@ -159,25 +129,24 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             token.tokenSupplyType = true;
             token.maxSupply = maxSupply;
         }
-        // create the expiry schedule for the token using ExpiryHelper
+
         token.expiry = createAutoRenewExpiry(
             address(this),
             HederaTokenService.defaultAutoRenewPeriod
         );
 
-        // call HTS precompiled contract, passing initial supply and decimals
         (int responseCode, address tokenAddress) = HederaTokenService
             .createFungibleToken(token, initialSupply, decimals);
 
         if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("mint wipe/supply failed");
+            revert("mint with wipe/supply keys failed");
         }
 
         emit TokenControllerMessage(
             "MINT",
             msg.sender,
             initialSupply,
-            "Success minting token with supply/wipe keys"
+            "Minted with supply + wipe keys (burn + re-mint enabled)"
         );
 
         createdTokenAddress = tokenAddress;
@@ -189,7 +158,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
     /// @param memo token longer form description as a string
     /// @param initialSupply number of tokens to mint
     /// @param decimals decimal for the token -> 100 of the token divisible to 1dp will be 1000 supply with decimal 1
-    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped suply @ maxSupply
+    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped supply @ maxSupply
     /// @return createdTokenAddress the address of the new token
     function createTokenWithNoKeys(
         string memory name,
@@ -238,103 +207,10 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         createdTokenAddress = tokenAddress;
     }
 
-	/**
-	* Hedera Security model update invalidated this use case. Left for historical record only.
-
-	// mint an FT with no keys - not adjustable, 1 time mint as clean and transparent as possible
-    /// @param name token name
-    /// @param symbol token symbol
-    /// @param memo token longer form description as a string
-    /// @param initialSupply number of tokens to mint
-    /// @param decimals decimal for the token -> 100 of the token divisible to 1dp will be 1000 supply with decimal 1
-    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped suply @ maxSupply
-    /// @return createdTokenAddress the address of the new token
-    function createTokenWithCustomFees(
-        string memory name,
-        string memory symbol,
-        string memory memo,
-        int64 initialSupply,
-        int32 decimals,
-        int64 maxSupply,
-		FTFixedFeeObject[] memory fixedFees,
-		FTFractionalFeeObject[] memory fractionalFees
-    )
-		external
-		payable
-		onlyOwner
-	returns (address createdTokenAddress) {
-		require((fixedFees.length + fractionalFees.length) <= 10, "Too many fees");
-        //define the token
-        IHederaTokenService.HederaToken memory token;
-        token.name = name;
-        token.symbol = symbol;
-        token.memo = memo;
-        token.treasury = address(this);
-
-        if (maxSupply > 0) {
-            token.tokenSupplyType = false;
-            token.maxSupply = maxSupply;
-        }
-
-        // create the expiry schedule for the token using ExpiryHelper
-        token.expiry = createAutoRenewExpiry(
-            address(this),
-            HederaTokenService.defaultAutoRenewPeriod
-        );
-
-		IHederaTokenService.FixedFee[] memory nativeFixedFees = new IHederaTokenService.FixedFee[](fixedFees.length);
-		for (uint8 i = 0; i < fixedFees.length; i++) {
-			IHederaTokenService.FixedFee memory fxdFee;
-			fxdFee.amount = fixedFees[i].amount;
-			fxdFee.feeCollector = fixedFees[i].feeCollector;
-
-			if (fixedFees[i].useHbarsForPayment) {
-				fxdFee.useHbarsForPayment = true;
-			}
-			else if (fixedFees[i].useCurrentTokenForPayment) {
-				fxdFee.useCurrentTokenForPayment = true;
-			}
-			else {
-				fxdFee.tokenId = fixedFees[i].tokenAddress;
-			}
-
-			nativeFixedFees[i] = fxdFee;
-		}
-
-		IHederaTokenService.FractionalFee[] memory nativeFractionalFees = new IHederaTokenService.FractionalFee[](fractionalFees.length);
-		for (uint8 i = 0; i < fractionalFees.length; i++) {
-			IHederaTokenService.FractionalFee memory fractionalFee;
-			fractionalFee.feeCollector = fractionalFees[i].feeCollector;
-			fractionalFee.numerator = fractionalFees[i].numerator;
-			fractionalFee.denominator = fractionalFees[i].denominator;
-			fractionalFee.netOfTransfers = fractionalFees[i].netOfTransfers;
-			fractionalFee.minimumAmount = fractionalFees[i].minimumAmount;
-			fractionalFee.maximumAmount = fractionalFees[i].maximumAmount;
-
-			nativeFractionalFees[i] = fractionalFee;
-		}
-
-        (int responseCode, address tokenAddress) = 
-            createFungibleTokenWithCustomFees(token, initialSupply, decimals, nativeFixedFees, nativeFractionalFees);
-
-        if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("mint FT with Fees failed");
-        }
-
-        emit TokenControllerMessage(
-            "MINT",
-            msg.sender,
-            initialSupply,
-            "Success minting token without keys"
-        );
-
-        createdTokenAddress = tokenAddress;
-    }
-	*/
-
+    /// Mint additional supply of a token (requires supply key)
     /// @param token address in EVM format of token to mint more supply to
     /// @param amount the number of new units to mint
-    /// (inclusive of decimal eg 10 more of a decimal 1 token => amount = 100)
+    /// (inclusive of decimal e.g. 10 more of a decimal 1 token => amount = 100)
     /// @return responseCode result of the operation
     /// @return newTotalSupply new supply post mint
     function mintAdditionalSupply(address token, int64 amount)
@@ -342,6 +218,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         onlyOwner
         returns (int responseCode, int64 newTotalSupply)
     {
+        require(amount > 0, "Positive mint amounts only");
         bytes[] memory _metadata;
 
         (responseCode, newTotalSupply, ) = HederaTokenService.mintToken(
@@ -353,13 +230,21 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         if (responseCode != HederaResponseCodes.SUCCESS) {
             revert("mint supply failed");
         }
+
+        emit TokenControllerMessage(
+            "MINT ADDITIONAL",
+            msg.sender,
+            amount,
+            "Additional supply minted"
+        );
     }
 
-    /// @param token address in EVM format of token to mint more supply to
-    /// @param amount the number of new units to mint
-    /// (inclusive of decimal eg 10 more of a decimal 1 token => amount = 100)
+    /// Burn tokens from the treasury (requires supply key)
+    /// @param token address in EVM format of token to burn
+    /// @param amount the number of units to burn from treasury
+    /// @param _serials empty array for FT burns
     /// @return responseCode result of the operation
-    /// @return newTotalSupply new supply post mint
+    /// @return newTotalSupply new supply post burn
     function burnFromTreasury(
         address token,
         int64 amount,
@@ -369,11 +254,17 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         onlyOwner
         returns (int responseCode, int64 newTotalSupply)
     {
+        require(amount > 0, "Positive burn amounts only");
+
         (responseCode, newTotalSupply) = HederaTokenService.burnToken(
             token,
             amount,
             _serials
         );
+
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("burn from treasury failed");
+        }
 
         emit TokenControllerMessage(
             "BURN",
@@ -381,22 +272,19 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             amount,
             "Burn (from treasury) complete"
         );
-
-        if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("burn @ tsry failed");
-        }
     }
 
-    /// Operation to wipe fungible tokens from caller's account
-	/// This method os open to all as the address foor burning is the msg.sender the call
-	/// can only burn tokens they own
+    /// Burn tokens from the caller's own account (requires wipe key on token)
+    /// This function is open to all -- callers can only burn tokens they own (msg.sender)
     /// @param token The token address
-    /// @param amount The number of tokens to wipe
+    /// @param amount The number of tokens to burn
     /// @return responseCode The response code for the status of the request. SUCCESS is 22.
     function burn(address token, int64 amount)
         external
         returns (int responseCode)
     {
+        require(amount > 0, "Positive burn amounts only");
+
         (responseCode) = HederaTokenService.wipeTokenAccount(
             token,
             msg.sender,
@@ -406,6 +294,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         if (responseCode != HederaResponseCodes.SUCCESS) {
             revert("burn failed");
         }
+
         emit TokenControllerMessage(
             "BURN",
             msg.sender,
@@ -414,10 +303,10 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         );
     }
 
-    /// Initiates a Fungible Token Transfer
-    /// @param token The ID of the token as a solidity address
-    /// @param accountIds account to do a transfer to/from
-    /// @param amounts The amount from the accountId at the same index
+    /// Batch transfer tokens to multiple recipients in a single transaction
+    /// @param token The token address
+    /// @param accountIds array of recipient addresses
+    /// @param amounts array of amounts (must match accountIds length)
     function batchTransferTokens(
         address token,
         address[] memory accountIds,
@@ -433,8 +322,15 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         );
 
         if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("transfer batch - failed");
+            revert("batch transfer failed");
         }
+
+        emit TokenControllerMessage(
+            "Batch Transfer",
+            msg.sender,
+            0,
+            "Batch transfer complete"
+        );
     }
 
     /// Allows spender to withdraw from your account multiple times, up to the value amount. If this function is called
@@ -453,16 +349,16 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
 
         (responseCode) = HederaTokenService.approve(token, spender, amount);
 
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("allowance approval - failed");
+        }
+
         emit TokenControllerMessage(
             "Approval",
             spender,
             SafeCast.toInt64(SafeCast.toInt256(amount)),
             "Allowance approved"
         );
-
-        if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("allowance approval - failed");
-        }
     }
 
     /// Check the allowance for a specific user via an SC call [mirror node better?]
@@ -480,16 +376,16 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             spender
         );
 
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("getAllowance - failed");
+        }
+
         emit TokenControllerMessage(
             "Allowance checked",
             spender,
             SafeCast.toInt64(SafeCast.toInt256(amount)),
             "checked"
         );
-
-        if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("getAllowance - failed");
-        }
     }
 
     /// Use HTS to transfer FT
@@ -502,8 +398,10 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         int64 amount
     )
 		external
-		onlyOwner 
+		onlyOwner
 	returns (int responseCode) {
+		require(amount > 0, "Positive transfers only");
+
         responseCode = HederaTokenService.transferToken(
             token,
             address(this),
@@ -511,7 +409,9 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             amount
         );
 
-		require(amount > 0, "Positive transfers only");
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("transferHTS - failed");
+        }
 
         emit TokenControllerMessage(
             "Transfer with HTS",
@@ -519,15 +419,11 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
             amount,
             "completed"
         );
-
-        if (responseCode != HederaResponseCodes.SUCCESS) {
-            revert("transferHTS - failed");
-        }
     }
 
     /// Transfer token from this contract to the recipient
     /// @param token address in EVM format of the token to transfer
-    /// @param recipient address in EVM fomat of the reciever of the token
+    /// @param recipient address in EVM format of the receiver of the token
     /// @param amount number of tokens to send (in long form adjusted for decimal)
     /// @return sent a boolean signalling success
     function transfer(
@@ -544,33 +440,12 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         emit TokenControllerMessage("Transfer", recipient, SafeCast.toInt64(SafeCast.toInt256(amount)), "complete");
     }
 
-    // Left in for example purposes - will remove for production
-    // Low level call to call hbar from the contract to avoid it getting trapped
-    /// @param receiverAddress address in EVM fomat of the reciever of the token
-    /// @param amount number of tokens to send (in long form adjusted for decimal)
-    /// @return sent a boolean signalling success
-    function callHbar(address payable receiverAddress, uint amount)
-        external
-        onlyOwner
-        returns (bool sent)
-    {
-        (sent, ) = receiverAddress.call{value: amount}("");
-        require(sent, "Failed to send Hbar");
-        receiverAddress.transfer(amount);
 
-        emit TokenControllerMessage(
-            "Hbar Call",
-            receiverAddress,
-            SafeCast.toInt64(SafeCast.toInt256(amount)),
-            "complete"
-        );
-    }
-
-    // Transfer hbar oput of the contract - using secure ether transfer pattern
-    // on top of onlyOwner as max gas of 2300 (not adjustable) will limit re-entrrant attacks
-    // also throws error on failure causing contract to auutomatically revert
-    /// @param receiverAddress address in EVM fomat of the reciever of the token
-    /// @param amount number of tokens to send (in long form adjusted for decimal)
+    // Transfer hbar out of the contract - using secure ether transfer pattern
+    // Address.sendValue forwards all available gas; onlyOwner limits re-entrancy risk
+    // Throws error on failure causing contract to automatically revert
+    /// @param receiverAddress address in EVM format of the receiver of the hbar
+    /// @param amount amount of hbar to send (in tinybar)
     function transferHbar(address payable receiverAddress, uint amount)
         external
         onlyOwner
@@ -587,7 +462,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
     }
 
     // Add an address to the allowance WL
-    /// @param newAddress the newss address to add
+    /// @param newAddress the new address to add
     function addAllowanceWhitelist(address newAddress) external onlyOwner {
         _allowanceWL.add(newAddress);
         emit TokenControllerMessage(
@@ -611,7 +486,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
     }
 
     /// Check the current White List for Approvals
-    /// @return wl an array of addresses currently enabled for allownace approval
+    /// @return wl an array of addresses currently enabled for allowance approval
     function getAllowanceWhitelist()
         external
         view
@@ -627,7 +502,7 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         return _allowanceWL.contains(addressToCheck);
     }
 
-    // allows the contract top recieve HBAR
+    // allows the contract to receive HBAR
     receive() external payable {
         emit TokenControllerMessage(
             "Receive",
