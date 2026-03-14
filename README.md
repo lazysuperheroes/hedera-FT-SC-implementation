@@ -322,13 +322,51 @@ async function checkBalance(accountId, tokenId) {
 
 The `FungibleTokenCreator` contract is deployed at the address stored in your `.env` as `CONTRACT_ID`. All `onlyOwner` functions can only be called by the account that deployed the contract.
 
-### State-Changing Functions
+### Token Creation Functions (choose one per deployment)
 
-#### `createTokenWithNoKeys(string name, string symbol, string memo, int64 initialSupply, int32 decimals, int64 maxSupply) -> address`
+The contract provides three creation modes. Choose the one that matches your trust model. Each is a one-time, irreversible action.
 
-*Access: `onlyOwner` | Payable (requires ~50 HBAR)*
+#### `createTokenWithNoKeys(...)` -- Maximum Transparency
 
-Creates a new HTS fungible token with zero keys. The token is minted into the contract's treasury. Set `maxSupply` to 0 for infinite type or a positive value for finite/capped type. This is a one-time irreversible action.
+*Access: `onlyOwner` | Payable (~50 HBAR)*
+
+Creates a token with **zero keys**. Supply is permanently fixed. No burn, no mint, no freeze, no pause. Provably immutable.
+
+#### `createFungibleWithBurn(...)` -- Deflationary
+
+*Access: `onlyOwner` | Payable (~50 HBAR)*
+
+Creates a token with a **Wipe Key** only (assigned to the contract). Enables the public `burn()` function so any token holder can burn their own tokens. Supply can only decrease. No re-minting.
+
+#### `createFungibleWithSupplyAndBurn(...)` -- Full Lifecycle
+
+*Access: `onlyOwner` | Payable (~50 HBAR)*
+
+Creates a token with **Wipe + Supply Keys** (assigned to the contract). Enables user self-burn via `burn()`, owner burn from treasury via `burnFromTreasury()`, and owner re-mint via `mintAdditionalSupply()`. Maximum flexibility while keeping all operations contract-governed.
+
+All three functions share the same parameters: `(string name, string symbol, string memo, int64 initialSupply, int32 decimals, int64 maxSupply) -> address`.
+
+### Supply Management Functions
+
+#### `mintAdditionalSupply(address token, int64 amount) -> (int responseCode, int64 newTotalSupply)`
+
+*Access: `onlyOwner` | Requires: Supply Key (use `createFungibleWithSupplyAndBurn`)*
+
+Mints additional tokens into the contract treasury. Amount is in the smallest unit (adjusted for decimals).
+
+#### `burnFromTreasury(address token, int64 amount, int64[] _serials) -> (int responseCode, int64 newTotalSupply)`
+
+*Access: `onlyOwner` | Requires: Supply Key*
+
+Burns tokens from the contract treasury. Pass an empty array for `_serials` (used only for NFTs).
+
+#### `burn(address token, int64 amount) -> int`
+
+*Access: **public** | Requires: Wipe Key (use `createFungibleWithBurn` or `createFungibleWithSupplyAndBurn`)*
+
+Burns tokens from the **caller's own account** (`msg.sender`). Anyone can burn tokens they hold -- they cannot burn anyone else's tokens. This is the deflationary mechanism.
+
+### Transfer Functions
 
 #### `transferHTS(address token, address receiver, int64 amount)`
 
@@ -341,6 +379,14 @@ Transfers tokens from the contract treasury to a receiver using the HTS `transfe
 *Access: `onlyOwner`*
 
 Transfers tokens from the contract treasury using the ERC-20 `transfer` interface. Functionally equivalent to `transferHTS` but uses the ERC-20 path.
+
+#### `batchTransferTokens(address token, address[] accountIds, int64[] amounts)`
+
+*Access: `onlyOwner`*
+
+Transfers tokens to multiple recipients in a single transaction. The `accountIds` and `amounts` arrays must be the same length. Useful for airdrops or batch distributions.
+
+### Allowance Functions
 
 #### `approveAllowance(address token, address spender, uint256 amount) -> int`
 
@@ -365,6 +411,8 @@ Adds an address to the allowance whitelist. Only whitelisted addresses can be gr
 *Access: `onlyOwner`*
 
 Removes an address from the allowance whitelist.
+
+### HBAR Functions
 
 #### `transferHbar(address payable receiverAddress, uint amount)`
 

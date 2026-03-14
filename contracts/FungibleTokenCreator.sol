@@ -31,6 +31,127 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         string message
     );
 
+    // Create a fungible token with a WIPE key only (enables user self-burn / deflationary model)
+    // No admin, supply, pause, freeze, KYC, or fee schedule keys
+    /// @param name token name
+    /// @param symbol token symbol
+    /// @param memo token longer form description as a string
+    /// @param initialSupply number of tokens to mint
+    /// @param decimals decimal for the token -> 100 of the token divisible to 1dp will be 1000 supply with decimal 1
+    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped supply @ maxSupply
+    /// @return createdTokenAddress the address of the new token
+    function createFungibleWithBurn(
+        string memory name,
+        string memory symbol,
+        string memory memo,
+        int64 initialSupply,
+        int32 decimals,
+        int64 maxSupply
+    )
+		external
+		payable
+		onlyOwner
+	returns (address createdTokenAddress) {
+        IHederaTokenService.TokenKey[]
+            memory keys = new IHederaTokenService.TokenKey[](1);
+
+        keys[0] = getSingleKey(KeyType.WIPE, KeyValueType.CONTRACT_ID, address(this));
+
+        IHederaTokenService.HederaToken memory token;
+        token.name = name;
+        token.symbol = symbol;
+        token.memo = memo;
+        token.treasury = address(this);
+        token.tokenKeys = keys;
+
+        if (maxSupply > 0) {
+            token.tokenSupplyType = true;
+            token.maxSupply = maxSupply;
+        }
+
+        token.expiry = createAutoRenewExpiry(
+            address(this),
+            HederaTokenService.defaultAutoRenewPeriod
+        );
+
+        (int responseCode, address tokenAddress) = HederaTokenService
+            .createFungibleToken(token, initialSupply, decimals);
+
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("mint with wipe key failed");
+        }
+
+        emit TokenControllerMessage(
+            "MINT",
+            msg.sender,
+            initialSupply,
+            "Minted with wipe key (burn enabled)"
+        );
+
+        createdTokenAddress = tokenAddress;
+    }
+
+    // Create a fungible token with WIPE + SUPPLY keys (enables burn + re-mint)
+    // No admin key, no pause key
+    /// @param name token name
+    /// @param symbol token symbol
+    /// @param memo token longer form description as a string
+    /// @param initialSupply number of tokens to mint
+    /// @param decimals decimal for the token -> 100 of the token divisible to 1dp will be 1000 supply with decimal 1
+    /// @param maxSupply Set to 0 for an infinite token, set > 0 to enforce capped supply @ maxSupply
+    /// @return createdTokenAddress the address of the new token
+    function createFungibleWithSupplyAndBurn(
+        string memory name,
+        string memory symbol,
+        string memory memo,
+        int64 initialSupply,
+        int32 decimals,
+        int64 maxSupply
+    )
+		external
+		payable
+		onlyOwner
+	returns (address createdTokenAddress) {
+        IHederaTokenService.TokenKey[]
+            memory keys = new IHederaTokenService.TokenKey[](1);
+
+        // Combine WIPE + SUPPLY into a single key entry
+        keys[0] = getSingleKey(KeyType.WIPE, KeyType.SUPPLY, KeyValueType.CONTRACT_ID, address(this));
+
+        IHederaTokenService.HederaToken memory token;
+        token.name = name;
+        token.symbol = symbol;
+        token.memo = memo;
+        token.treasury = address(this);
+        token.tokenKeys = keys;
+
+        if (maxSupply > 0) {
+            token.tokenSupplyType = true;
+            token.maxSupply = maxSupply;
+        }
+
+        token.expiry = createAutoRenewExpiry(
+            address(this),
+            HederaTokenService.defaultAutoRenewPeriod
+        );
+
+        (int responseCode, address tokenAddress) = HederaTokenService
+            .createFungibleToken(token, initialSupply, decimals);
+
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("mint with wipe/supply keys failed");
+        }
+
+        emit TokenControllerMessage(
+            "MINT",
+            msg.sender,
+            initialSupply,
+            "Minted with supply + wipe keys (burn + re-mint enabled)"
+        );
+
+        createdTokenAddress = tokenAddress;
+    }
+
     // mint an FT with no keys - not adjustable, 1 time mint as clean and transparent as possible
     /// @param name token name
     /// @param symbol token symbol
@@ -84,6 +205,132 @@ contract FungibleTokenCreator is KeyHelper, ExpiryHelper, Ownable {
         );
 
         createdTokenAddress = tokenAddress;
+    }
+
+    /// Mint additional supply of a token (requires supply key)
+    /// @param token address in EVM format of token to mint more supply to
+    /// @param amount the number of new units to mint
+    /// (inclusive of decimal e.g. 10 more of a decimal 1 token => amount = 100)
+    /// @return responseCode result of the operation
+    /// @return newTotalSupply new supply post mint
+    function mintAdditionalSupply(address token, int64 amount)
+        external
+        onlyOwner
+        returns (int responseCode, int64 newTotalSupply)
+    {
+        require(amount > 0, "Positive mint amounts only");
+        bytes[] memory _metadata;
+
+        (responseCode, newTotalSupply, ) = HederaTokenService.mintToken(
+            token,
+            amount,
+            _metadata
+        );
+
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("mint supply failed");
+        }
+
+        emit TokenControllerMessage(
+            "MINT ADDITIONAL",
+            msg.sender,
+            amount,
+            "Additional supply minted"
+        );
+    }
+
+    /// Burn tokens from the treasury (requires supply key)
+    /// @param token address in EVM format of token to burn
+    /// @param amount the number of units to burn from treasury
+    /// @param _serials empty array for FT burns
+    /// @return responseCode result of the operation
+    /// @return newTotalSupply new supply post burn
+    function burnFromTreasury(
+        address token,
+        int64 amount,
+        int64[] memory _serials
+    )
+        external
+        onlyOwner
+        returns (int responseCode, int64 newTotalSupply)
+    {
+        require(amount > 0, "Positive burn amounts only");
+
+        (responseCode, newTotalSupply) = HederaTokenService.burnToken(
+            token,
+            amount,
+            _serials
+        );
+
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("burn from treasury failed");
+        }
+
+        emit TokenControllerMessage(
+            "BURN",
+            msg.sender,
+            amount,
+            "Burn (from treasury) complete"
+        );
+    }
+
+    /// Burn tokens from the caller's own account (requires wipe key on token)
+    /// This function is open to all -- callers can only burn tokens they own (msg.sender)
+    /// @param token The token address
+    /// @param amount The number of tokens to burn
+    /// @return responseCode The response code for the status of the request. SUCCESS is 22.
+    function burn(address token, int64 amount)
+        external
+        returns (int responseCode)
+    {
+        require(amount > 0, "Positive burn amounts only");
+
+        (responseCode) = HederaTokenService.wipeTokenAccount(
+            token,
+            msg.sender,
+            amount
+        );
+
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("burn failed");
+        }
+
+        emit TokenControllerMessage(
+            "BURN",
+            msg.sender,
+            amount,
+            "Burn (from user) complete"
+        );
+    }
+
+    /// Batch transfer tokens to multiple recipients in a single transaction
+    /// @param token The token address
+    /// @param accountIds array of recipient addresses
+    /// @param amounts array of amounts (must match accountIds length)
+    function batchTransferTokens(
+        address token,
+        address[] memory accountIds,
+        int64[] memory amounts
+    )
+		external
+		onlyOwner
+	returns (int responseCode) {
+        (responseCode) = HederaTokenService.transferTokens(
+            token,
+            accountIds,
+            amounts
+        );
+
+        if (responseCode != HederaResponseCodes.SUCCESS) {
+            revert("batch transfer failed");
+        }
+
+        emit TokenControllerMessage(
+            "Batch Transfer",
+            msg.sender,
+            0,
+            "Batch transfer complete"
+        );
     }
 
     /// Allows spender to withdraw from your account multiple times, up to the value amount. If this function is called
